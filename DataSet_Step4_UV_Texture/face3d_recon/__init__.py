@@ -1,9 +1,10 @@
+import os
 import torch
 import torch.nn as nn
 
 from .recon_network import ReconNetWrapper
 from .parametric_face_model import ParametricFaceModel
-from .renderer import compute_224projXY_norm_by_pin_hole
+from .renderer import compute_224projXY_norm_by_pin_hole, compute_224projXY_norm_by_pin_hole2ori, get_R_T, world_to_camera_transform
 
 
 class Face3d_Recon_API(nn.Module):
@@ -83,6 +84,52 @@ class Face3d_Recon_API(nn.Module):
                                                                     focal=self.focal)
         return face_projXY, face_norm
 
+    def compute_224projXY_norm_by_pin_hole2ori(self, coeffs_dict, trans_params):
+        '''
+        Compute project XY coordinates (224x224) and normal vectors for each vertex by pin hole camera.
+
+        Args:
+            coeffs_dict: dict.
+        Returns:
+            face_projXY: torch.Tensor, (B, N, 2). The project XY coordinates (224x224) for each vertex.
+            face_norm: torch.Tensor, (B, N, 3). The normal vector for each vertex.
+        '''
+        face_shape, _ = self.facemodel.compute_shape(coeffs_dict['id'], coeffs_dict['exp'])
+        mesh_info = {'v': face_shape, 'f_v': self.facemodel.head_buf, 'v_f': self.facemodel.point_buf}
+        face_projXY, face_norm, camera_k = compute_224projXY_norm_by_pin_hole2ori(mesh_info=mesh_info,
+                                                                    angle=coeffs_dict['angle'],
+                                                                    trans=coeffs_dict['trans'],
+                                                                    camera_distance=self.camera_distance,
+                                                                    focal=self.focal,
+                                                                    trans_params=trans_params)
+        return face_projXY, face_norm, camera_k
+
+    def get_projected_mesh(self, coeffs_dict):
+        face_shape, _ = self.facemodel.compute_shape(coeffs_dict['id'], coeffs_dict['exp'])
+        mesh_info = {'v': face_shape, 'f_v': self.facemodel.head_buf, 'v_f': self.facemodel.point_buf}
+        face_projXY, _ = compute_224projXY_norm_by_pin_hole(mesh_info=mesh_info,
+                                                                    angle=coeffs_dict['angle'],
+                                                                    trans=coeffs_dict['trans'],
+                                                                    camera_distance=self.camera_distance,
+                                                                    focal=self.focal)
+        return face_projXY.cpu().numpy(), self.facemodel.head_tri_vt.cpu().numpy(),
+
+    def save_transferd_mesh(self, coeffs_dict, mesh_path, mtl_path, uv_name):
+        face_shape, _ = self.facemodel.compute_shape(coeffs_dict['id'], coeffs_dict['exp'])
+        R, T = get_R_T(coeffs_dict['angle'], coeffs_dict['trans'])
+        save_shape = world_to_camera_transform(face_shape, R, T, self.camera_distance)
+        mesh_info = {
+            'v': save_shape[0].cpu().numpy(),
+            'vt': self.facemodel.vt_list.cpu().numpy(),
+            'fv': self.facemodel.head_buf.cpu().numpy(),
+            'fvt': self.facemodel.head_tri_vt.cpu().numpy(),
+            # 'mtl_name': mtl_path.split('/')[-1]
+            'mtl_name': os.path.basename(mtl_path)
+        }
+        self.creat_mtl(mtl_path, uv_name)
+        self.write_mesh_obj(mesh_info, mesh_path)
+        return mesh_info['v']    
+
     def save_mesh(self, coeffs_dict, mesh_path, mtl_path, uv_name, is_neutral=False):
         '''
         Save 3D mesh to obj file.
@@ -105,10 +152,12 @@ class Face3d_Recon_API(nn.Module):
             'vt': self.facemodel.vt_list.cpu().numpy(),
             'fv': self.facemodel.head_buf.cpu().numpy(),
             'fvt': self.facemodel.head_tri_vt.cpu().numpy(),
-            'mtl_name': mtl_path.split('/')[-1]
+            #'mtl_name': mtl_path.split('/')[-1]
+            'mtl_name': os.path.basename(mtl_path)
         }
         self.creat_mtl(mtl_path, uv_name)
         self.write_mesh_obj(mesh_info, mesh_path)
+        return mesh_info['v']
 
     def creat_mtl(self, mtl_path, uv_path='albedo.png'):
         with open(mtl_path, 'w') as fp:

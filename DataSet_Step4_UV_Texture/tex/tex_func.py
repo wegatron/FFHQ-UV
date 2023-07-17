@@ -147,6 +147,62 @@ def remap_tex_from_input2D(input_img, seg_mask, projXY, norm, unwrap_uv_idx_v_id
     return remap_tex, remap_mask
 
 
+def remap_tex_from_input2D2(input_img, seg_mask, projXY, norm, unwrap_uv_idx_v_idx, unwrap_uv_idx_bw):
+    '''
+    Remap texture from input 2D image to UV map.
+
+    Args:
+        input_img: numpy.array (h, w, 3). The input 2D image.
+        seg_mask: numpy.array (h, w, 3). The parsing mask of facial parts (without eyes and mouth).
+        projXY: numpy.array (N, 2). The project XY coordinates (h x w) for each vertex.
+        norm: numpy.array (N, 3). The normal vector for each vertex.
+        unwrap_uv_idx_v_idx: numpy.array (unwrap_size, unwrap_size, 3). The vertex indices for each UV pixel.
+            It contains 3 vertices of the face on which the UV pixel is located.
+        unwrap_uv_idx_bw: numpy.array (unwrap_size, unwrap_size, 3). The barycentric coordinates for each UV pixel.
+    Returns:
+        remap_tex: numpy.array (unwrap_size, unwrap_size, 3). The remapped UV texture.
+        remap_mask: numpy.array (unwrap_size, unwrap_size, 1). The mask of remapped texture.
+    '''
+    n_ver = projXY.shape[0]
+
+    # Step 1. Find 2D image pixel coordinates for each UV map pixel
+    # mesh vertex --> 2D image pixel (N, 1, 2)
+    ver_XY = np.reshape(projXY, (n_ver, 1, 2))
+
+    # UV map pixel --> mesh vertex (unwrap_size, unwrap_size)
+    # each UV map pixel corresponding to 3 vertices and its barycentric coordinates
+    uv_ver_map_y0 = unwrap_uv_idx_v_idx[:, :, 0].astype(np.float32)
+    uv_ver_map_y1 = unwrap_uv_idx_v_idx[:, :, 1].astype(np.float32)
+    uv_ver_map_y2 = unwrap_uv_idx_v_idx[:, :, 2].astype(np.float32)
+    uv_ver_map_x = np.zeros_like(uv_ver_map_y0).astype(np.float32)
+
+    # UV map pixel --> 2D image pixel (unwrap_size, unwrap_size, 2)
+    # each UV map pixel corresponding to 3 2D image pixels and its barycentric coordinates
+    uv_XY_0 = cv2.remap(ver_XY, uv_ver_map_x, uv_ver_map_y0, cv2.INTER_NEAREST)
+    uv_XY_1 = cv2.remap(ver_XY, uv_ver_map_x, uv_ver_map_y1, cv2.INTER_NEAREST)
+    uv_XY_2 = cv2.remap(ver_XY, uv_ver_map_x, uv_ver_map_y2, cv2.INTER_NEAREST)
+    uv_XY = \
+        uv_XY_0 * unwrap_uv_idx_bw[:, :, 0:1] + \
+        uv_XY_1 * unwrap_uv_idx_bw[:, :, 1:2] + \
+        uv_XY_2 * unwrap_uv_idx_bw[:, :, 2:3]
+
+    # Step 2. remap texture pixel from 2D image to UV map (unwrap_size, unwrap_size, 2)
+    remap_tex = cv2.remap(input_img, uv_XY[:, :, 0], uv_XY[:, :, 1], cv2.INTER_LINEAR)
+    remap_tex = np.clip(remap_tex, 0., 255.)
+
+    # Step 5. remap visible vertices to UV map, then get the visible mask (unwrap_size, unwrap_size, 1)
+    # compute visible vertices according to normal vectors (N, 1, 1)
+    ver_vis_mask = np.reshape((norm[:, 2]).astype(np.float32), (n_ver, 1, 1))
+    remap_vis_mask0 = cv2.remap(ver_vis_mask, uv_ver_map_x, uv_ver_map_y0, cv2.INTER_NEAREST)
+    remap_vis_mask1 = cv2.remap(ver_vis_mask, uv_ver_map_x, uv_ver_map_y1, cv2.INTER_NEAREST)
+    remap_vis_mask2 = cv2.remap(ver_vis_mask, uv_ver_map_x, uv_ver_map_y2, cv2.INTER_NEAREST)
+    remap_vis_p = \
+        remap_vis_mask0 * unwrap_uv_idx_bw[:, :, 0] + \
+        remap_vis_mask1 * unwrap_uv_idx_bw[:, :, 1] + \
+        remap_vis_mask2 * unwrap_uv_idx_bw[:, :, 2]
+
+    return remap_tex, remap_vis_p
+
 def blur_tex_mask_with_major_minor_valid_mask(tex_mask, major_valid_mask, minor_valid_mask):
     '''
     Blur the tex_mask, where consider the major_valid_mask and minor_valid_mask.
@@ -186,6 +242,27 @@ def blur_tex_mask_with_major_minor_valid_mask(tex_mask, major_valid_mask, minor_
 
     return blur_mask_minor, blur_mask_major_one, blur_mask_final
 
+def fill_facial_region_zsw(template_tex, input_tex, tex_mask, mouth_mask, major_valid_mask):
+    # Step 1. template match color
+    template_tex_match_color = match_color_in_yuv(src_tex=template_tex, dst_tex=input_tex, mask=tex_mask)
+
+    # Step 2. process fill mask
+    # erode the texture mask
+    kernel1 = cv2.getStructuringElement(cv2.MORPH_RECT, (6, 6))
+    tex_mask_erode1 = cv2.erode(tex_mask, kernel1)
+
+    kernel2 = cv2.getStructuringElement(cv2.MORPH_RECT, (10, 10))
+    tex_mask_erode2 = cv2.erode(tex_mask, kernel2)
+
+    # treat the mouth area specifically.
+    tex_mask_erode = tex_mask_erode1 * mouth_mask + tex_mask_erode2 * (1 - mouth_mask)
+    blur_mask = tex_mask_erode * major_valid_mask
+    blur_mask = cv2.blur(blur_mask, (31, 31), 0)
+    blur_mask = blur_mask * tex_mask_erode
+    blur_mask = cv2.blur(blur_mask, (21, 21), 0)
+    blur_mask = blur_mask * tex_mask
+    fill_tex = linear_blend(template_tex=template_tex_match_color, input_tex=input_tex, mask=blur_mask)
+    return fill_tex, blur_mask
 
 def fill_facial_region(template_tex, input_tex, tex_mask, major_valid_mask, minor_valid_mask, mouth_mask):
     '''

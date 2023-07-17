@@ -36,7 +36,7 @@ class Landmark68_API:
             lm_detector_path: str. The pretrained landmark detector model.
             mtcnn_path: str. The pretrained mtcnn model.
         '''
-
+        print('zsw_debug: lm_detector_path: ', lm_detector_path)
         lm_sess, input_op, output_op = load_lm_graph(lm_detector_path)
         self.lm_sess = lm_sess
         self.input_op = input_op

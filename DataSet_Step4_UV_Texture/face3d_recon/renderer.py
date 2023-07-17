@@ -124,6 +124,43 @@ def compute_norm(vertices, face_vert_idx, vert_face_idx):
     return vertex_norm
 
 
+def compute_224projXY_norm_by_pin_hole2ori(mesh_info, angle, trans, camera_distance, focal, trans_params):
+    '''
+    Compute project XY coordinates (224x224) and normal vectors for each vertex by pin hole camera.
+
+    Args:
+        mesh_info: dict. The information of the mesh, should contain:
+            'v': torch.Tensor, (B, N, 3). The coordinates of vertices (world coordinate system).
+            'f_v': torch.Tensor, (M, 3). The vertex indices for each face.
+            'v_f': torch.Tensor, (N, 8). The face indices for each vertex that lies in.
+        angle: torch.Tensor, (B, 3). The estimated angle.
+        trans: torch.Tensor, (B, 3). The estimated trans.
+        camera_distance: float. The camera distance.
+        focal: int. The camera focal length.
+    Returns:
+        projXY: torch.Tensor, (B, N, 2). The project XY coordinates (224x224) for each vertex.
+        norm: torch.Tensor, (B, N, 3). The normal vector for each vertex.
+    '''
+
+    # world coordinates -> camera coordinates
+    R, T = get_R_T(angle, trans)
+    vertices_camera = world_to_camera_transform(mesh_info['v'], R, T, camera_distance)
+
+    # camera coordinates -> imaging coordinates
+    w0, h0, s, t0, t1, ts = trans_params
+    camera_k = np.array([focal / s, 0, (224 - ts) / (2 * s) + t0, 0, focal / s, (224 - ts) / (2 * s) + t1, 0, 0, 1],
+             dtype=np.float32).reshape([3, 3])
+
+    proj_mat = torch.from_numpy(camera_k.transpose()).float()
+    proj_mat = proj_mat.type_as(vertices_camera)
+    projXY = camera_to_imaging_transform(vertices_camera, proj_mat)
+
+    # compute normal
+    norm = compute_norm(mesh_info['v'], mesh_info['f_v'], mesh_info['v_f'])  # (B, N, 3)
+    norm = norm @ R
+
+    return projXY, norm, camera_k
+
 def compute_224projXY_norm_by_pin_hole(mesh_info, angle, trans, camera_distance, focal):
     '''
     Compute project XY coordinates (224x224) and normal vectors for each vertex by pin hole camera.

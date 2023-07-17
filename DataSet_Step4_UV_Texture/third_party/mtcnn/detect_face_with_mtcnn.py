@@ -9,8 +9,8 @@ python test_image_lm86_with_mtcnn.py --checkpoint_dir=checkpoints/test/model.ckp
 
 import cv2
 import numpy as np
-import tensorflow as tf
-
+#import tensorflow as tf
+import tensorflow.compat.v1 as tf
 
 def create_mtcnn_pb(sess):
 
@@ -276,7 +276,7 @@ def pad(total_boxes, w, h):
 
 # create tensorflow graph for mtcnn
 def load_mtcnn_graph(graph_filename):
-    with tf.gfile.GFile(graph_filename, 'rb') as f:
+    with tf.io.gfile.GFile(graph_filename, 'rb') as f:
         graph_def = tf.GraphDef()
         graph_def.ParseFromString(f.read())
 

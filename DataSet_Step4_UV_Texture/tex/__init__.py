@@ -4,7 +4,7 @@ from scipy.io import loadmat
 import skimage
 
 from utils import read_img, img2mask
-from .tex_func import remap_tex_from_input2D, fill_facial_region, blend_with_template
+from .tex_func import remap_tex_from_input2D2, remap_tex_from_input2D, fill_facial_region, fill_facial_region_zsw, blend_with_template
 from .poisson_blend import poisson_blend, get_laplacian_matrices
 
 
@@ -129,6 +129,47 @@ class Tex_API:
             rely_tex[coo[0]:coo[1], coo[2]:coo[3]] = res_part
             solve_mask[coo[0]:coo[1], coo[2]:coo[3]] = np.ones_like(solve_mask[coo[0]:coo[1], coo[2]:coo[3]])
         return rely_tex, solve_mask
+
+
+    def gen_tex(self, front_img, front_seg_mask, front_projXY, front_norm):
+        front_remap_tex, front_remap_p = remap_tex_from_input2D2(input_img=front_img,
+                                                                   seg_mask=front_seg_mask,
+                                                                   projXY=front_projXY,
+                                                                   norm=front_norm,
+                                                                   unwrap_uv_idx_v_idx=self.unwrap_uv_idx_v_idx,
+                                                                   unwrap_uv_idx_bw=self.unwrap_uv_idx_bw)
+        return front_remap_tex, front_remap_p
+
+    def fill_missing(self, front_remap_tex, front_remap_mask):
+        fill_tex, front_fill_mask = fill_facial_region_zsw(template_tex=self.facial_base_uv,
+                                                       input_tex=front_remap_tex,
+                                                       tex_mask=front_remap_mask,
+                                                       mouth_mask=self.mouth_mask,
+                                                       major_valid_mask=self.major_front_mask)
+        fill_mask = img2mask(front_fill_mask, thre=0.5)
+
+        # calculate unreliable parts mask
+        # from fill_mask, can obtain the incompleted eyes, mouth, and nosal base region
+        unrely_mask = (1 - fill_mask) * self.center_face_mask
+        # for nosal base region, the nostril has double vision, which need to detect the nostril region
+        fill_tex_yuv = skimage.color.convert_colorspace(fill_tex, "rgb", "yuv")
+        tex_dark_mask = img2mask(np.mean(fill_tex_yuv[:, :, 0]) - fill_tex_yuv[:, :, 0], thre=0.0)
+        tex_dark_mask_dilate = img2mask(cv2.blur(tex_dark_mask, (5, 5), 0), thre=0.0)
+        unrely_nostril_mask = tex_dark_mask_dilate * self.nosal_base_mask
+        unrely_mask = img2mask(unrely_mask + unrely_nostril_mask + self.nostril_mask, thre=0.5)
+
+        # solve unreliable parts (eyes, mouth, and nosal base)
+        rely_tex, solve_mask = self.solve_unreliable_parts_using_poisson(fill_tex, unrely_mask)
+        rely_mask = img2mask(fill_mask + solve_mask, thre=0.5)
+
+        # blend with template
+        uv_tex_result = blend_with_template(template_tex=self.base_uv,
+                                            input_tex=rely_tex,
+                                            tex_mask=rely_mask,
+                                            major_valid_mask=self.major_whole_mask,
+                                            minor_valid_mask=self.minor_whole_mask,
+                                            hair_mask=self.hair_mask)
+        return uv_tex_result
 
     def __call__(self, left_img, front_img, right_img, left_seg_mask, front_seg_mask, right_seg_mask, left_projXY,
                  front_projXY, right_projXY, left_norm, front_norm, right_norm):
