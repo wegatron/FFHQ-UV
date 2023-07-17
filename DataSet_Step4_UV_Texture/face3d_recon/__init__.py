@@ -180,6 +180,7 @@ class Face3d_Recon_API(nn.Module):
             # write mtl info
             if mtl_name:
                 fp.write(f'mtllib {mtl_name}\n')
+                fp.write('usemtl blinn1SG\n')
             # write vertices
             for x, y, z in v:
                 fp.write('v %f %f %f\n' % (x, y, z))
