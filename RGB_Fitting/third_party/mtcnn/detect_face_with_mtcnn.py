@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 import tensorflow as tf
 
+tf.global_variables_initializer = tf.compat.v1.global_variables_initializer
 
 def create_mtcnn_pb(sess):
 
