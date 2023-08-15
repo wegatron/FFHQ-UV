@@ -4,6 +4,10 @@ from scipy.io import loadmat
 import tensorflow as tf
 from shutil import move
 
+tf.gfile = tf.io.gfile
+tf.GraphDef = tf.compat.v1.GraphDef
+tf.InteractiveSession = tf.compat.v1.InteractiveSession
+
 BBRegressorParam = loadmat('third_party/landmark68/BBRegressorParam_r.mat')
 mean_face = np.loadtxt('third_party/landmark68/test_mean_face.txt')
 mean_face = mean_face.reshape([68, 2])

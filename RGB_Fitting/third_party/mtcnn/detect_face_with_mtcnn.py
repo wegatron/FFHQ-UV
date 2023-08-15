@@ -11,6 +11,10 @@ import cv2
 import numpy as np
 import tensorflow as tf
 
+tf.gfile = tf.io.gfile
+tf.GraphDef = tf.compat.v1.GraphDef
+tf.InteractiveSession = tf.compat.v1.InteractiveSession
+tf.global_variables_initializer = tf.compat.v1.global_variables_initializer
 
 def create_mtcnn_pb(sess):
 
