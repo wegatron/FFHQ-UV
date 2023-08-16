@@ -235,6 +235,7 @@ def write_mesh_obj(mesh_info, file_path):
         # write mtl info
         if mtl_name is not None:
             fp.write(f'mtllib {mtl_name}\n')
+            fp.write('usemtl blinn1SG')
 
         # write vertices
         if rgb_tex:

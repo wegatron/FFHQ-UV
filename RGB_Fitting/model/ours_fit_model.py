@@ -5,7 +5,7 @@ import torch.nn.functional as F
 
 from .hifi3dpp import ParametricFaceModel
 from .renderer_nvdiffrast import MeshRenderer
-from . import uvtex_spherical_fixshape_fitter, uvtex_wspace_shape_joint_fitter
+from . import uvtex_spherical_fixshape_fitter, uvtex_wspace_shape_joint_fitter, mv_uvtex_wspace_shape_joint_fitter
 from network import texgan
 from network.recog import define_net_recog
 from network.recon_deep3d import define_net_recon_deep3d
@@ -301,3 +301,89 @@ class FitModel:
                        mlt_name='stage3_mesh.mlt',
                        uv_name='stage3_uv.png')
         self.save_coeffs(path=logger.vis_dir, coeffs_name='stage3_coeffs.pt')
+
+
+    def mv_fitting(self, input_datas, logger):
+            input_data = input_datas[0]
+            # fix random seed
+            setup_seed(123)
+
+            # print args
+            logger.write_txt_log(self.gather_args_str())
+
+            # save the input data
+            #torch.save(input_data, os.path.join(logger.vis_dir, f'input_data.pt'))
+
+            #--------- Stage 1 - getting initial coeffs by Deep3D NN inference ---------
+
+            logger.write_txt_log('Stage 1 getting initial coeffs by Deep3D NN inference.')
+            pred_coeffses = []
+            for i in range(len(input_datas)):
+                input_data = input_datas[i]
+                with torch.no_grad():
+                    self.pred_coeffs = self.net_recon_deep3d(input_data['img'].to(self.device))
+                    pred_coeffses.append(self.pred_coeffs)
+                self.infer_render(is_uv_tex=False)
+                vis_img = self.visualize(input_data, is_uv_tex=False)
+                vis_tex_uv = self.visualize_3dmmtex_as_uv()
+                logger.write_disk_images([vis_img], [f'stage1_vis_{i}'])
+                logger.write_disk_images([vis_tex_uv], [f'stage1_vis_3dmmtex_as_uv_{i}'])
+                self.save_mesh(path=logger.vis_dir, mesh_name=f'stage1_mesh_{i}.obj', is_uv_tex=False)
+                self.save_coeffs(path=logger.vis_dir, coeffs_name=f'stage1_coeffs_{i}.pt', is_uv_tex=False)
+            
+            self.pred_coeffs = pred_coeffses[0]
+            #--------- Stage 2 - search UV tex on a spherical surface with fixed shape ---------
+
+            logger.write_txt_log('Start stage 2 searching UV tex on a spherical surface with fixed shape.')
+            logger.reset_prefix(prefix='s2_search_uvtex_spherical_fixshape')
+            fitter = uvtex_spherical_fixshape_fitter.Fitter(facemodel=self.facemodel,
+                                                            tex_gan=self.tex_gan,
+                                                            renderer=self.renderer,
+                                                            net_recog=self.net_recog,
+                                                            net_vgg=self.net_vgg,
+                                                            logger=logger,
+                                                            input_data=input_data,
+                                                            init_coeffs=self.pred_coeffs,
+                                                            init_latents_z=None,
+                                                            **self.args_s2_search_uvtex_spherical_fixshape)
+            self.pred_coeffs, self.pred_latents_z, self.pred_latents_w = fitter.iterate()
+            logger.reset_prefix()
+            logger.write_txt_log('End stage 2 searching UV tex on a spherical surface with fixed shape.')
+
+            self.infer_render()
+            vis_img = self.visualize(input_data)
+            logger.write_disk_images([vis_img], ['stage2_vis'])
+            logger.write_disk_images([tensor2np(self.pred_uv_map[:1, :, :, :])], ['stage2_uv'])
+            self.save_mesh(path=logger.vis_dir,
+                        mesh_name='stage2_mesh.obj',
+                        mlt_name='stage2_mesh.mlt',
+                        uv_name='stage2_uv.png')
+            self.save_coeffs(path=logger.vis_dir, coeffs_name='stage2_coeffs.pt')
+
+            #--------- Stage 3 - jointly optimize UV tex and shape ---------
+
+            logger.write_txt_log('Start stage 3 jointly optimize UV tex and shape.')
+            logger.reset_prefix(prefix='s3_optimize_uvtex_shape_joint')
+            fitter = mv_uvtex_wspace_shape_joint_fitter.MVFitter(facemodel=self.facemodel,
+                                                            tex_gan=self.tex_gan,
+                                                            renderer=self.renderer,
+                                                            net_recog=self.net_recog,
+                                                            net_vgg=self.net_vgg,
+                                                            logger=logger,
+                                                            input_datas=input_datas,
+                                                            init_coeffs=pred_coeffses,
+                                                            init_latents_z=self.pred_latents_z,
+                                                            **self.args_s3_optimize_uvtex_shape_joint)
+            self.pred_coeffs, self.pred_latents_z, self.pred_latents_w = fitter.iterate()
+            logger.reset_prefix()
+            logger.write_txt_log('End stage 3 jointly optimize UV tex and shape.')
+
+            self.infer_render()
+            vis_img = self.visualize(input_data)
+            logger.write_disk_images([vis_img], ['stage3_vis'])
+            logger.write_disk_images([tensor2np(self.pred_uv_map[:1, :, :, :])], ['stage3_uv'])
+            self.save_mesh(path=logger.vis_dir,
+                        mesh_name='stage3_mesh.obj',
+                        mlt_name='stage3_mesh.mlt',
+                        uv_name='stage3_uv.png')
+            self.save_coeffs(path=logger.vis_dir, coeffs_name='stage3_coeffs.pt')
